@@ -1,0 +1,127 @@
+---
+title: "Practical Machine Learing Course Project"
+author: "Mark Becker"
+date: "August 11, 2016"
+output: html_document
+---
+The goal of this project is to fit an effective machine learning model to a training data set taken from the UCI HAR data, evaluating its performance on a test data set drawn from the same source.  Several models will be tried and their performance compared.  Finally, predictions from the best model will be submitted to answer the quiz portion of the assignment.
+
+First we read in the test and traning data sets. Separate analysis of the data tables shows that many of the columns are not populated with data, so we make a selection that excludes those columns, as well as a few others like timestamp and user name that aren't relevant to the analysis.  What remains will be only columns that are populated with numeric measurements from the monitoring devices, plus the "classe" column that we will be tying to predict.
+
+```{r import_and_clean_data, cache=TRUE}
+  library(caret)
+  library(klaR)
+  library(e1071)
+  library(ggplot2)
+  library(randomForest)
+
+  training <- read.csv("pml-training.csv", stringsAsFactors = FALSE)
+  final_test <- read.csv("pml-testing.csv", stringsAsFactors = FALSE)
+
+  na_columns <- sapply(training, function(x) sum(is.na(x)))
+  data_columns = names(na_columns[na_columns == 0])
+  
+  training <- subset(training, select = which(names(training) %in% data_columns))
+  final_test <- subset(final_test, select = which(names(final_test) %in% data_columns))
+
+  remove_cols = names(training)[startsWith(names(training), "kurtosis") 
+                                | startsWith(names(training), "skewness")
+                                | startsWith(names(training), "min_yaw")
+                                | startsWith(names(training), "max_yaw")
+                                | startsWith(names(training), "amplitude_yaw")]
+
+    remove_cols = c(remove_cols, c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window"))
+
+ training = subset(training, select = -which(names(training) %in% remove_cols))
+ final_test = subset(final_test, select = -which(names(final_test) %in% remove_cols))
+
+ inTrain = createDataPartition(training$classe, p = 3/4)[[1]]
+ testing = training[-inTrain,]
+ 
+  str(training)
+```
+
+
+##Perform Principal Components Analysis
+
+Given that the data set contains a large number of features whose relative importance is unclear, this seemed to be a good opportunity to perform a Principal Components analysis.  Some experiementation resulting on fixing the number of principal components at 10.  I created a "preProc" object  containing the principal components and used it to make predictions on the training data.  Then I trained a model using my pca prediction object with a K-Nearest Neighbors algorithm on with the training "classe" values.  Finally I evaluated the model on the testing data partition. The result showd a 98% prediction accuracy, which gave me good confidence that the features in the data set could be effectively used to make predictions on the "classe" value.  This was a clearly successful prediction model that I was able to use to predict the 20 classe values on the quiz with 95% accuracy (see below).  But I wanted to investigate other modeling approaches as well.  I investigated a random forest prediction model and also a decision tree model that I created using the features revealed as important by the random forest model.
+
+```{r principal_components_analysis, cache=TRUE}
+
+preProc <- preProcess(training, method="pca",pcaComp=10)
+pcaPredictTraining <- predict(preProc, training)
+#modelPC <- train(training$classe ~ ., method="lda", data=pcaPredictTraining)
+pcaModel <- train(training$classe ~ ., method="knn", data=pcaPredictTraining)
+pcaPredictTesting <- predict(preProc,testing)
+confusionMatrix(testing$classe, predict(pcaModel, pcaPredictTesting))
+
+
+```
+
+
+Fit a Random Forest model
+
+```{r random_forest_model, cache=TRUE}
+ set.seed(12345)
+ rfModel <- randomForest(as.factor(classe) ~ .,
+                      data=training, 
+                      importance=TRUE, 
+                      ntree=200)
+rfModel
+#varImpPlot(fit)
+```
+
+Evaluate the RF model on the testing data shows 100% prediction accuracy.  None of the "classe" values in the testing data partition 
+were misclassified.
+
+```{r evaluate_random_Forest_model, cache=TRUE}
+
+  rfPredictTesting <- predict(rfModel,testing)
+  confusionMatrix(testing$classe, rfPredictTesting)
+
+```
+
+This plot shows the error rate of the random forest model in prediction for each "classe" category, with classe D being having the highest error rate in prediction, though all are under 0.1%.
+
+```{r RF_error_plot, cache=TRUE}
+  plot(rfModel)
+  legend('topright', colnames(rfModel$err.rate), col=1:6, fill=1:6)
+
+```
+
+The random forest implementation provided information about the importance of the veriables, in term of which variables contribute
+most "information gain" when splitting nodes in order to grow the tree.  In the code below, "type=1" specifies that the measure of importance to be used is "mean decrease in accuracy." The list of features by decreasing importance appears below, along with a chart displaying the same information.
+
+
+```{r rf_feature_importance, cache=TRUE}
+
+  imp <- importance(rfModel, type=1)
+  sorted_imp <- sort(imp[,1], decreasing=TRUE)
+  rankedFeatures <- data.frame(class=names(sorted_imp), importance=as.numeric(sorted_imp))
+  rankedFeatures
+
+```
+
+```{r rf_feature_importance_graph, cache=TRUE}
+  featureImportance <- data.frame(Feature=row.names(imp), Importance=imp[,1])
+  ggplot(featureImportance, aes(x=reorder(Feature, Importance), y=Importance)) +
+     geom_bar(stat="identity", fill="#53cfff") +
+     coord_flip() + 
+     theme_light(base_size=20) +
+     xlab("") +
+     ylab("Importance") + 
+     ggtitle("Random Forest Feature Importance\n") +
+     theme(plot.title=element_text(size=18))
+```
+
+##Evaluate Principal Components model on the Final Quiz Data
+
+```{r evaluate_pca_model_on_final_test, cache=TRUE}
+
+pcaPredictFinalTest <- predict(preProc,final_test)
+#confusionMatrix(final_test$classe, predict(pcaModel, pcaPredictFinalTest))
+finalTestPredict <- predict(pcaModel, pcaPredictFinalTest)
+quiz_answers <- data.frame(finalTestPredict)
+quiz_answers.colnames <- 1:20
+#quiz_answers
+```
